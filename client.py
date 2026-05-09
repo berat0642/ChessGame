@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QStackedWidget,
     QSizePolicy, QFrame, QLineEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QSize
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QSize, QTimer
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
 
 from pieces import initialize_board, King, Pawn, Queen
@@ -193,6 +193,8 @@ SELECTED = "#F6F669"
 
 class ChessBoardWidget(QWidget):
     game_over = pyqtSignal(str, str)  # title, detail
+    opponent_left = pyqtSignal()
+    timeout = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -295,6 +297,8 @@ class ChessBoardWidget(QWidget):
 
     # ---- Signal handlers (main thread) ----
     def _handle_color_assigned(self, color):
+        if hasattr(self, 'waiting_timer') and self.waiting_timer.isActive():
+            self.waiting_timer.stop()
         self.board = initialize_board()
         self.is_white_turn = True
         self.selected = (-1, -1)
@@ -314,12 +318,20 @@ class ChessBoardWidget(QWidget):
         self.turn_label.setText("Rakip bekleniyor...")
         self.status_label.setText("Bağlantı kuruldu, rakip aranıyor...")
         self._enable_board(False)
+        if hasattr(self, 'waiting_timer') and self.waiting_timer.isActive():
+            self.waiting_timer.stop()
+        self.waiting_timer = QTimer()
+        self.waiting_timer.setSingleShot(True)
+        self.waiting_timer.timeout.connect(self._on_waiting_timeout)
+        self.waiting_timer.start(10000)  # 10 saniye
 
     def _handle_opponent_left(self):
-        self.turn_label.setText("Rakip bekleniyor...")
-        self.role_label.setText("")
-        self.status_label.setText("Rakip ayrıldı, yeni rakip aranıyor...")
-        self._enable_board(False)
+        QMessageBox.information(self, "Rakip Ayrıldı", "Rakibiniz sistemden düştü.\nTamam'a bastığınızda lobiye döneceksiniz.")
+        self.opponent_left.emit()
+
+    def _on_waiting_timeout(self):
+        QMessageBox.information(self, "Rakip Bulunamadı", "10 saniye içinde rakip bulunamadı.\nTamam'a bastığınızda lobiye döneceksiniz.")
+        self.timeout.emit()
 
     def _handle_move_received(self, move):
         self._receive_move(move)
@@ -532,6 +544,8 @@ class MainWindow(QMainWindow):
 
         self.start_screen.play_clicked.connect(self._on_play)
         self.chess_widget.game_over.connect(self._on_game_over)
+        self.chess_widget.opponent_left.connect(self._on_opponent_left)
+        self.chess_widget.timeout.connect(self._on_timeout)
         self.end_screen.replay_clicked.connect(self._on_replay)
         self.end_screen.quit_clicked.connect(self.close)
 
@@ -544,6 +558,16 @@ class MainWindow(QMainWindow):
     def _on_game_over(self, title, detail):
         self.end_screen.set_result(title, detail)
         self.stack.setCurrentIndex(2)
+
+    def _on_opponent_left(self):
+        if self.chess_widget.client:
+            self.chess_widget.client.close()
+        self.stack.setCurrentIndex(0)
+
+    def _on_timeout(self):
+        if self.chess_widget.client:
+            self.chess_widget.client.close()
+        self.stack.setCurrentIndex(0)
 
     def _on_replay(self):
         if self.chess_widget.client:
